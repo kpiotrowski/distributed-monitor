@@ -55,6 +55,7 @@ func (pc *prodCons) consume() {
 }
 
 func main() {
+	log.SetLevel(log.DebugLevel)
 	data := []int{}
 	if len(os.Args) < 2 {
 		panic("Not enough arguments to run. You should execute example with [this_node_addr] [node1_addr] [node2_addr] ...")
@@ -75,8 +76,8 @@ func main() {
 	monitor.BindData("buforek", &data)
 	prodCons := prodCons{
 		buffer:    &data,
-		condEmpty: monitor.NewCond(),
-		condFull:  monitor.NewCond(),
+		condEmpty: monitor.NewCond("condEmpty"),
+		condFull:  monitor.NewCond("condFull"),
 		monitor:   monitor,
 		name:      os.Args[1],
 	}
