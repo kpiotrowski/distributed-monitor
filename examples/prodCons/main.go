@@ -81,11 +81,13 @@ func main() {
 		monitor:   monitor,
 		name:      os.Args[1],
 	}
+	cluster.Start()
+
 	if os.Args[1] == "127.0.0.1:5556" {
 		// go func() {
 		for {
 			prodCons.produce()
-			time.Sleep(time.Millisecond * 500)
+			// time.Sleep(time.Millisecond * 500)
 		}
 		// }()
 	} else {
