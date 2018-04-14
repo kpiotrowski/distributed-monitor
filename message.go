@@ -2,8 +2,10 @@ package monitor
 
 import (
 	"encoding/json"
+	"fmt"
 
-	"github.com/pebbe/zmq4"
+	zmq "github.com/pebbe/zmq4"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -16,13 +18,41 @@ const (
 type messageDetails struct {
 	MsgType string `json:"type"`
 	Payload []byte `json:"payload"`
+	Monitor string `json:"monitor"`
 }
 
 type pingMessage struct {
 	Sender string `json:"sender"`
 }
 
-func handleMessageData(monitor *DMonitor, message []byte) error {
+type requestMessage struct {
+	Sender         string `json:"sender"`
+	SequenceNumber int    `json:"seq_num"`
+}
+
+func receiveMessages(cluster *Cluster) {
+	receiver, err := zmq.NewSocket(zmq.PULL)
+	defer receiver.Close()
+	if err != nil {
+		log.Error("Failed to create socket: ", err)
+	}
+
+	receiver.Bind(fmt.Sprintf("tcp://*:%s", cluster.port))
+	for cluster.working {
+		data, err := receiver.RecvBytes(0)
+
+		if err != nil {
+			log.Error("Failed receive data: ", err)
+			continue
+		}
+		err = handleMessageData(cluster, data)
+		if err != nil {
+			log.Error("Failed to handle message: ", err)
+		}
+	}
+}
+
+func handleMessageData(cluster *Cluster, message []byte) error {
 	msgDet := messageDetails{}
 	err := json.Unmarshal(message, &msgDet)
 	if err != nil {
@@ -31,65 +61,118 @@ func handleMessageData(monitor *DMonitor, message []byte) error {
 
 	switch msgDet.MsgType {
 	case msgTypeREQUEST:
-		return handleRequestMessage(monitor, msgDet.Payload)
+		return handleRequestMessage(cluster.monitors[msgDet.Monitor], msgDet.Payload)
 	case msgTypeTOKEN:
-		return handleTokenMessage(monitor, msgDet.Payload)
+		return handleTokenMessage(cluster.monitors[msgDet.Monitor], msgDet.Payload)
 	case msgTypePingREQ:
-		return handlePingReqMessage(monitor, msgDet.Payload)
+		return handlePingReqMessage(cluster, msgDet.Payload)
 	case msgTypePingRES:
-		return handlePingRespMessage(monitor, msgDet.Payload)
+		return handlePingRespMessage(cluster, msgDet.Payload)
 	}
 	return nil
 }
 
 func handleRequestMessage(monitor *DMonitor, message []byte) error {
-	//TODO -------------------------------
-	return nil
+	body := requestMessage{}
+	err := json.Unmarshal(message, &body)
+	if err != nil {
+		return err
+	}
+
+	monitor.reqCSMutex.Lock()
+	defer monitor.reqCSMutex.Unlock()
+
+	if monitor.requestNumber[body.Sender] > body.SequenceNumber {
+		return nil
+	}
+	// log.Info("received REQUEST message: ", body)
+
+	monitor.requestNumber[body.Sender] = body.SequenceNumber
+
+	if !monitor.cSbusy && monitor.token != nil && monitor.token.LastRequestNumber[body.Sender]+1 == monitor.requestNumber[body.Sender] {
+		monitor.token.saveData(monitor.Data)
+		monitor.token.Sender = monitor.cluster.HostAddr
+		log.Debug("Sending token to: ", body.Sender)
+		err = sendTokenMessage(monitor.Name, monitor.cluster.HostAddr, monitor.cluster.Nodes[body.Sender], monitor.token)
+		monitor.token = nil
+	}
+
+	return err
 }
 
 func handleTokenMessage(monitor *DMonitor, message []byte) error {
-	//TODO -------------------------------
+	body := tokenStr{}
+	err := json.Unmarshal(message, &body)
+	if err != nil {
+		return err
+	}
+	log.Debug("received TOKEN from: ", body.Sender)
+	monitor.tokenChannel <- body
 	return nil
 }
 
-func handlePingReqMessage(monitor *DMonitor, message []byte) error {
+func handlePingReqMessage(cluster *Cluster, message []byte) error {
 	// log.Info("Ping req")
 	body := pingMessage{}
 	err := json.Unmarshal(message, &body)
 	if err != nil {
 		return err
 	}
-	return sendPingResponse(monitor.HostAddr, monitor.Nodes[body.Sender])
+	return sendPingResponse(cluster.HostAddr, cluster.Nodes[body.Sender])
 }
 
-func handlePingRespMessage(monitor *DMonitor, message []byte) error {
+func handlePingRespMessage(cluster *Cluster, message []byte) error {
 	// log.Info("Ping resp")
 	body := pingMessage{}
 	err := json.Unmarshal(message, &body)
 	if err != nil {
 		return err
 	}
-	monitor.pingChannel <- body.Sender
+	cluster.pingChannel <- body.Sender
 	return nil
 }
 
-func sendPingMessage(sender string, socket *zmq4.Socket) error {
+func sendPingMessage(sender string, socket *zmq.Socket) error {
 	payload, _ := json.Marshal(pingMessage{Sender: sender})
 	msg, _ := json.Marshal(messageDetails{
 		MsgType: msgTypePingREQ,
 		Payload: payload,
 	})
-	_, err := socket.SendBytes(msg, zmq4.DONTWAIT)
+	_, err := socket.SendBytes(msg, zmq.DONTWAIT)
 	return err
 }
 
-func sendPingResponse(sender string, socket *zmq4.Socket) error {
+func sendPingResponse(sender string, socket *zmq.Socket) error {
 	payload, _ := json.Marshal(pingMessage{Sender: sender})
 	msg, _ := json.Marshal(messageDetails{
 		MsgType: msgTypePingRES,
 		Payload: payload,
 	})
-	_, err := socket.SendBytes(msg, zmq4.DONTWAIT)
+	_, err := socket.SendBytes(msg, zmq.DONTWAIT)
 	return err
+}
 
+func sendCsRequestMessage(monitor, sender string, socket *zmq.Socket, seqNumber int) error {
+	x := requestMessage{Sender: sender, SequenceNumber: seqNumber}
+	payload, _ := json.Marshal(&x)
+
+	msg, _ := json.Marshal(messageDetails{
+		MsgType: msgTypeREQUEST,
+		Payload: payload,
+		Monitor: monitor,
+	})
+	_, err := socket.SendBytes(msg, zmq.DONTWAIT)
+	return err
+}
+
+func sendTokenMessage(monitor, sender string, socket *zmq.Socket, token *tokenStr) error {
+
+	payload, _ := json.Marshal(token)
+	msg, _ := json.Marshal(messageDetails{
+		MsgType: msgTypeTOKEN,
+		Payload: payload,
+		Monitor: monitor,
+	})
+	_, err := socket.SendBytes(msg, zmq.DONTWAIT)
+	return err
 }

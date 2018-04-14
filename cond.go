@@ -21,7 +21,7 @@ func createDCond(monitor *DMonitor, name string) *DCond {
 
 //Wait function unlocks monitor to allow other nodes to use CS; other nodes are notified about
 func (dCond *DCond) Wait() {
-	dCond.waitingNodes = append(dCond.waitingNodes, dCond.monitor.HostAddr)
+	dCond.waitingNodes = append(dCond.waitingNodes, dCond.monitor.cluster.HostAddr)
 	dCond.monitor.UnLock()
 
 	//TODO notify other nodes that this node is waiting

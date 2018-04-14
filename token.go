@@ -6,16 +6,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type requestMessage struct {
-	sender         int
-	sequenceNumber int
-}
-
 type tokenStr struct {
-	LastRequestNumber map[string]int         `json:"lrn"`
-	WaitinQ           []string               `json:"wq"`
-	Data              map[string]interface{} `json:"data"`
-	Sender            string                 `json:"sender"`
+	LastRequestNumber map[string]int    `json:"lrn"`
+	WaitinQ           []string          `json:"wq"`
+	Data              map[string][]byte `json:"data"`
+	Sender            string            `json:"sender"`
 }
 
 func (token *tokenStr) marshall() ([]byte, error) {
@@ -37,13 +32,29 @@ func (token *tokenStr) unMarshal(data []byte) error {
 }
 
 func (token *tokenStr) saveData(data map[string]interface{}) {
-	token.Data = data
+	for k, v := range data {
+		token.Data[k], _ = json.Marshal(v)
+	}
 }
 
 func (token *tokenStr) loadData(data *map[string]interface{}) {
 	for key := range *data {
 		if val2, ok := token.Data[key]; ok {
-			(*data)[key] = val2
+			json.Unmarshal(val2, (*data)[key])
 		}
 	}
+}
+
+func createFirstToken(hosts []string) *tokenStr {
+	token := tokenStr{
+		Sender:            "",
+		Data:              map[string][]byte{},
+		WaitinQ:           []string{},
+		LastRequestNumber: map[string]int{},
+	}
+	for _, h := range hosts {
+		token.LastRequestNumber[h] = 0
+	}
+
+	return &token
 }
