@@ -83,17 +83,17 @@ func main() {
 	}
 	cluster.Start()
 
-	if os.Args[1] == "127.0.0.1:5556" {
-		// go func() {
+	// if os.Args[1] == "127.0.0.1:5556" {
+	go func() {
 		for {
 			prodCons.produce()
-			// time.Sleep(time.Millisecond * 500)
+			time.Sleep(time.Millisecond * 200)
 		}
-		// }()
-	} else {
-		for {
-			prodCons.consume()
-			time.Sleep(time.Millisecond * 500)
-		}
+	}()
+	// } else {
+	for {
+		prodCons.consume()
+		time.Sleep(time.Millisecond * 500)
 	}
+	// }
 }
