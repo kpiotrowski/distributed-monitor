@@ -35,17 +35,25 @@ func NewCluster(host string, hosts ...string) (*Cluster, error) {
 	}
 
 	for _, h := range hosts {
-		cluster.Nodes[h], _ = zmq.NewSocket(zmq.PUSH)
+		var err error
+		cluster.Nodes[h], err = zmq.NewSocket(zmq.PUSH)
+		if err != nil {
+			log.Error("Failed to create socket: ", err)
+			return nil, err
+		}
 		cluster.Nodes[h].Connect(fmt.Sprintf("tcp://%s", h))
 	}
 
-	go receiveMessages(&cluster)
+	return &cluster, nil
+}
+
+func (cluster *Cluster) Start() error {
+	go receiveMessages(cluster)
 	err := cluster.testConnection()
 	if err != nil {
-		return nil, errors.New("Cluster ping timed out")
+		return errors.New("Cluster ping timed out")
 	}
-
-	return &cluster, nil
+	return nil
 }
 
 // Destroy destorys cluster
@@ -72,7 +80,7 @@ func (cluster *Cluster) testConnection() error {
 			select {
 			case ping = <-cluster.pingChannel:
 				ch <- true
-			case <-time.After(5 * time.Second):
+			case <-time.After(30 * time.Second):
 				ch <- false
 			}
 		}()

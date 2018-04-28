@@ -3,7 +3,6 @@ package monitor
 import (
 	"sync"
 
-	"github.com/satori/go.uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -62,6 +61,7 @@ func createMonitor(cluster *Cluster, name, host string, hosts []string) (*DMonit
 //Lock implements a distributed lock operation
 func (dMonitor *DMonitor) Lock() {
 	dMonitor.mutex.Lock()
+	log.Debug("LOCK")
 	dMonitor.reqCSMutex.Lock()
 
 	dMonitor.cSwaiting = true
@@ -89,6 +89,7 @@ func (dMonitor *DMonitor) Lock() {
 //UnLock implements a distributed unlock operation
 func (dMonitor *DMonitor) UnLock() {
 	dMonitor.reqCSMutex.Lock()
+	log.Debug("UNLOCK")
 	dMonitor.cSbusy = false
 	dMonitor.cSwaiting = false
 
@@ -96,14 +97,14 @@ func (dMonitor *DMonitor) UnLock() {
 	dMonitor.releaseCS()
 
 	dMonitor.reqCSMutex.Unlock()
+
 	dMonitor.mutex.Unlock()
 }
 
 //NewCond created and returns new conditional variable
-func (dMonitor *DMonitor) NewCond() *DCond {
-	condNameU, _ := uuid.NewV4()
-	cond := createDCond(dMonitor, condNameU.String())
-	dMonitor.Conds[condNameU.String()] = cond
+func (dMonitor *DMonitor) NewCond(name string) *DCond {
+	cond := createDCond(dMonitor, name)
+	dMonitor.Conds[name] = cond
 
 	return cond
 }
@@ -122,6 +123,7 @@ func (dMonitor *DMonitor) requestCS() {
 			log.Error(err)
 		}
 	}
+	log.Debug("Waiting for the token")
 	token := <-dMonitor.tokenChannel
 	dMonitor.token = &token //waiting on tooken
 }
@@ -136,7 +138,7 @@ func (dMonitor *DMonitor) releaseCS() {
 	if len(dMonitor.token.WaitinQ) > 0 {
 		nodeToSend := dMonitor.token.WaitinQ[0]
 		dMonitor.token.WaitinQ = dMonitor.token.WaitinQ[1:]
-		log.Debug("Sending token to: ", nodeToSend)
+		log.Debug("(2) Sending token to: ", nodeToSend)
 		sendTokenMessage(dMonitor.Name, dMonitor.cluster.HostAddr, dMonitor.cluster.Nodes[nodeToSend], dMonitor.token)
 		dMonitor.token = nil
 	}
@@ -149,4 +151,15 @@ func elemInArray(el string, arr []string) bool {
 		}
 	}
 	return false
+}
+
+func removeElemArray(el string, arr []string) []string {
+	for i, v := range arr {
+		if el == v {
+			newArr := arr[0:i]
+			newArr = append(newArr, arr[i+1:]...)
+			return newArr
+		}
+	}
+	return arr
 }

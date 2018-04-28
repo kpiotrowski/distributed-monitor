@@ -13,6 +13,8 @@ const (
 	msgTypeTOKEN   = "MSG_TOKEN"
 	msgTypePingREQ = "MSG_PING_REQ"
 	msgTypePingRES = "MSG_PING_RES"
+	msgTypeWait    = "MSG_WAIT"
+	msgTypeSignal  = "MSG_SIGNAL"
 )
 
 type messageDetails struct {
@@ -28,6 +30,11 @@ type pingMessage struct {
 type requestMessage struct {
 	Sender         string `json:"sender"`
 	SequenceNumber int    `json:"seq_num"`
+}
+
+type condMessage struct {
+	Sender string `json:"sender"`
+	Cond   string `json:"cond"`
 }
 
 func receiveMessages(cluster *Cluster) {
@@ -68,7 +75,44 @@ func handleMessageData(cluster *Cluster, message []byte) error {
 		return handlePingReqMessage(cluster, msgDet.Payload)
 	case msgTypePingRES:
 		return handlePingRespMessage(cluster, msgDet.Payload)
+	case msgTypeWait:
+		return handleWaitMessage(cluster.monitors[msgDet.Monitor], msgDet.Payload)
+	case msgTypeSignal:
+		return handleSigalMessage(cluster.monitors[msgDet.Monitor], msgDet.Payload)
 	}
+	return nil
+}
+
+func handleWaitMessage(monitor *DMonitor, message []byte) error {
+	body := condMessage{}
+	err := json.Unmarshal(message, &body)
+	if err != nil {
+		return err
+	}
+	monitor.reqCSMutex.Lock()
+	log.Debugf("Received Wait message from %s, cond: %s", body.Sender, body.Cond)
+	monitor.Conds[body.Cond].waitingNodes = append(monitor.Conds[body.Cond].waitingNodes, body.Sender)
+	monitor.reqCSMutex.Unlock()
+
+	return nil
+}
+
+func handleSigalMessage(monitor *DMonitor, message []byte) error {
+	body := condMessage{}
+	err := json.Unmarshal(message, &body)
+	if err != nil {
+		return err
+	}
+	monitor.reqCSMutex.Lock()
+	log.Debugf("Received signal messageon %s", body.Cond)
+
+	if elemInArray(monitor.cluster.HostAddr, monitor.Conds[body.Cond].waitingNodes) {
+		monitor.Conds[body.Cond].waitChannel <- true
+		monitor.Conds[body.Cond].waitingNodes = removeElemArray(monitor.cluster.HostAddr, monitor.Conds[body.Cond].waitingNodes)
+	}
+
+	monitor.reqCSMutex.Unlock()
+
 	return nil
 }
 
@@ -166,12 +210,33 @@ func sendCsRequestMessage(monitor, sender string, socket *zmq.Socket, seqNumber 
 }
 
 func sendTokenMessage(monitor, sender string, socket *zmq.Socket, token *tokenStr) error {
-
 	payload, _ := json.Marshal(token)
 	msg, _ := json.Marshal(messageDetails{
 		MsgType: msgTypeTOKEN,
 		Payload: payload,
 		Monitor: monitor,
+	})
+	_, err := socket.SendBytes(msg, zmq.DONTWAIT)
+	return err
+}
+
+func sendWaitingMessage(monitor, cond, sender string, socket *zmq.Socket) error {
+	payload, _ := json.Marshal(condMessage{Cond: cond, Sender: sender})
+	msg, _ := json.Marshal(messageDetails{
+		MsgType: msgTypeWait,
+		Monitor: monitor,
+		Payload: payload,
+	})
+	_, err := socket.SendBytes(msg, zmq.DONTWAIT)
+	return err
+}
+
+func sendSignalMessage(monitor, cond, sender string, socket *zmq.Socket) error {
+	payload, _ := json.Marshal(condMessage{Cond: cond, Sender: sender})
+	msg, _ := json.Marshal(messageDetails{
+		MsgType: msgTypeSignal,
+		Monitor: monitor,
+		Payload: payload,
 	})
 	_, err := socket.SendBytes(msg, zmq.DONTWAIT)
 	return err
